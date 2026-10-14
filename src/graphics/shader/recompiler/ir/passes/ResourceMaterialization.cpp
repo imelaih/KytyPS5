@@ -789,9 +789,26 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 			    image.mip_count != image_class.mip_count ||
 			    image.conversion_format != image_class.conversion_format ||
 			    image.shader_swizzle != image_class.shader_swizzle) {
-				return SpecializationFail(
-				    fmt::format("indirect image table at pc 0x{:08x} has incompatible candidates",
-				                program.info.images[root_index].first_use_pc));
+				// Workaround: instead of aborting, bind an incompatible candidate as a null
+				// image with the exemplar's type so the shader still compiles. The affected
+				// texture renders black/empty instead of crashing the emulator.
+				static uint32_t warned = 0;
+				if (warned < 16u) {
+					warned++;
+					std::fprintf(stderr,
+					             "shader resource specialization: indirect image table at pc 0x%08x has "
+					             "incompatible candidate %u, binding null image (workaround)\n",
+					             program.info.images[root_index].first_use_pc, candidate);
+				}
+				const auto dword_count               = snapshot.images[candidate].dword_count;
+				snapshot.images[candidate]             = {};
+				snapshot.images[candidate].dword_count = dword_count;
+				image.numeric_class     = image_class.numeric_class;
+				image.dimension         = image_class.dimension;
+				image.mip_count         = image_class.mip_count;
+				image.conversion_format = image_class.conversion_format;
+				image.shader_swizzle    = image_class.shader_swizzle;
+				image.cube              = image_class.cube;
 			}
 		}
 	}
