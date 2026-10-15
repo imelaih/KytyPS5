@@ -631,6 +631,25 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 			    NullImageWorkaroundEnabled()) {
 				continue;
 			}
+			// A table that is only fetched (never filtered through a sampler) can mix float
+			// and integer textures: the emitter fetches each candidate with its own numeric
+			// type and bitcasts the raw bits to the instruction's type, as the GPU returns
+			// raw texel bits for unfiltered loads.
+			const auto sampled_by_pair = [&](uint32_t index) {
+				return std::ranges::any_of(program.info.sampled_pairs,
+				                           [&](const auto& pair) { return pair.image == index; });
+			};
+			const auto bitcastable = [](Prospero::TextureNumericClass value) {
+				return value == Prospero::TextureNumericClass::Float ||
+				       value == Prospero::TextureNumericClass::Uint ||
+				       value == Prospero::TextureNumericClass::Sint;
+			};
+			if (coords_ok && mip_ok && format_ok && swizzle_ok && !numeric_ok &&
+			    bitcastable(image.numeric_class) && bitcastable(image_class.numeric_class) &&
+			    !sampled_by_pair(root_index) && !sampled_by_pair(candidate) &&
+			    NullImageWorkaroundEnabled()) {
+				continue;
+			}
 			if (!numeric_ok || !coords_ok || !mip_ok || !format_ok || !swizzle_ok) {
 				// Opt-in workaround (set KYTY_NULL_IMAGE_WORKAROUND=1): instead of aborting,
 				// bind an incompatible candidate as a null image with the exemplar's type so
