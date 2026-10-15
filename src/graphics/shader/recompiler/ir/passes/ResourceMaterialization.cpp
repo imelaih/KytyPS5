@@ -22,6 +22,14 @@ namespace {
 constexpr uint64_t AddressMask            = 0x0000ffffffffffffull;
 constexpr uint64_t MaxIndirectDescriptorProbes = 65536u;
 
+bool NullImageWorkaroundEnabled() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("KYTY_NULL_IMAGE_WORKAROUND");
+		return value != nullptr && value[0] == '1';
+	}();
+	return enabled;
+}
+
 bool SpecializationFail(std::string_view message) {
 	std::fprintf(stderr, "shader resource specialization failed: %.*s\n",
 	             static_cast<int>(message.size()), message.data());
@@ -610,30 +618,45 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 			}
 			const bool same_coordinates = image.dimension == image_class.dimension &&
 			                              image.cube == image_class.cube;
-			if (image.numeric_class != image_class.numeric_class ||
-			    (!same_coordinates && !(is_2d(image.dimension) && is_2d(image_class.dimension))) ||
-			    image.mip_count != image_class.mip_count ||
-			    image.conversion_format != image_class.conversion_format ||
-			    image.shader_swizzle != image_class.shader_swizzle) {
+			const bool coords_ok =
+			    same_coordinates || (is_2d(image.dimension) && is_2d(image_class.dimension));
+			const bool mip_ok     = image.mip_count == image_class.mip_count;
+			const bool format_ok  = image.conversion_format == image_class.conversion_format;
+			const bool swizzle_ok = image.shader_swizzle == image_class.shader_swizzle;
+			const bool numeric_ok = image.numeric_class == image_class.numeric_class;
+			// The SPIR-V emitter selects each indirect candidate separately and uses that
+			// candidate's own dimension and mip count, so a mip-count difference alone is
+			// representable. With the workaround enabled, keep such candidates real.
+			if (coords_ok && !mip_ok && format_ok && swizzle_ok && numeric_ok &&
+			    NullImageWorkaroundEnabled()) {
+				continue;
+			}
+			if (!numeric_ok || !coords_ok || !mip_ok || !format_ok || !swizzle_ok) {
 				// Opt-in workaround (set KYTY_NULL_IMAGE_WORKAROUND=1): instead of aborting,
 				// bind an incompatible candidate as a null image with the exemplar's type so
 				// the shader still compiles. The affected texture renders black/empty.
-				static const bool workaround_enabled = [] {
-					const char* value = std::getenv("KYTY_NULL_IMAGE_WORKAROUND");
-					return value != nullptr && value[0] == '1';
-				}();
-				if (!workaround_enabled) {
+				if (!NullImageWorkaroundEnabled()) {
 					return SpecializationFail(
 					    fmt::format("indirect image table at pc 0x{:08x} has incompatible candidates",
 					                program.info.images[root_index].first_use_pc));
 				}
 				static uint32_t warned = 0;
-				if (warned < 16u) {
+				if (warned < 64u) {
 					warned++;
 					std::fprintf(stderr,
 					             "shader resource specialization: indirect image table at pc 0x%08x has "
-					             "incompatible candidate %u, binding null image (workaround)\n",
-					             program.info.images[root_index].first_use_pc, candidate);
+					             "incompatible candidate %u, binding null image (workaround) "
+					             "[dim %u/%u cube %u/%u mips %u/%u fmt %u/%u swz 0x%x/0x%x num %u/%u]\n",
+					             program.info.images[root_index].first_use_pc, candidate,
+					             static_cast<uint32_t>(image.dimension),
+					             static_cast<uint32_t>(image_class.dimension),
+					             static_cast<uint32_t>(image.cube), static_cast<uint32_t>(image_class.cube),
+					             image.mip_count, image_class.mip_count,
+					             static_cast<uint32_t>(image.conversion_format),
+					             static_cast<uint32_t>(image_class.conversion_format),
+					             image.shader_swizzle, image_class.shader_swizzle,
+					             static_cast<uint32_t>(image.numeric_class),
+					             static_cast<uint32_t>(image_class.numeric_class));
 				}
 				const auto dword_count               = snapshot.images[candidate].dword_count;
 				snapshot.images[candidate]             = {};
