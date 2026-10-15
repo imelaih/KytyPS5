@@ -762,6 +762,11 @@ void EmitImage(ValueEmitContext& ctx, const IR::Inst& inst) {
 					            descriptor, coord, spv::ImageOperandsLodMask,
 					            LodU32(ctx, mem, *address, mem.image_dimension));
 				        }
+				        if (candidate.numeric_class != numeric_class) {
+					        // Mixed float/integer indirect tables: keep the raw texel bits.
+					        return Unary(state, spv::OpBitcast, ImageVectorType(state, numeric_class, 4),
+					                     fetched);
+				        }
 				        return fetched;
 			            });
 			        return ResultVector(ctx, UnpackImageTexel(ctx, mem, color), numeric_class,
