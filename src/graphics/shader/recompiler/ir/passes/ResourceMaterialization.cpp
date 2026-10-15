@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <fmt/format.h>
 #include <functional>
+#include <cstdlib>
 #include <numeric>
 #include <unordered_set>
 
@@ -614,9 +615,18 @@ static bool BuildResourceSpecialization(const ResourcePlan& program, ResourceSna
 			    image.mip_count != image_class.mip_count ||
 			    image.conversion_format != image_class.conversion_format ||
 			    image.shader_swizzle != image_class.shader_swizzle) {
-				// Workaround: instead of aborting, bind an incompatible candidate as a null
-				// image with the exemplar's type so the shader still compiles. The affected
-				// texture renders black/empty instead of crashing the emulator.
+				// Opt-in workaround (set KYTY_NULL_IMAGE_WORKAROUND=1): instead of aborting,
+				// bind an incompatible candidate as a null image with the exemplar's type so
+				// the shader still compiles. The affected texture renders black/empty.
+				static const bool workaround_enabled = [] {
+					const char* value = std::getenv("KYTY_NULL_IMAGE_WORKAROUND");
+					return value != nullptr && value[0] == '1';
+				}();
+				if (!workaround_enabled) {
+					return SpecializationFail(
+					    fmt::format("indirect image table at pc 0x{:08x} has incompatible candidates",
+					                program.info.images[root_index].first_use_pc));
+				}
 				static uint32_t warned = 0;
 				if (warned < 16u) {
 					warned++;
